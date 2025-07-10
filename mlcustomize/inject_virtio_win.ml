@@ -1,5 +1,5 @@
 (* virt-v2v
- * Copyright (C) 2009-2023 Red Hat Inc.
+ * Copyright (C) 2009-2025 Red Hat Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -89,10 +89,6 @@ and from_path g root path =
   let t = get_inspection g root in
   { t with virtio_win = path; was_set = true }
 
-and from_libosinfo g root =
-  let t = get_inspection g root in
-  { t with virtio_win = ""; was_set = false }
-
 and get_inspection g root =
   (* Fail hard if inspection hasn't been done or it's not a Windows
    * guest.  If it happens it indicates an internal error in the
@@ -132,45 +128,25 @@ let rec inject_virtio_win_drivers ({ g } as t) reg =
   (* XXX Inelegant hack copied originally from [Convert_windows].
    * We should be able to work this into the code properly later.
    *)
-  let (machine : machine_type), virtio_1_0 =
+  let (machine : machine_type) =
     match t.i_arch with
     | ("i386"|"x86_64") ->
-       (try
-          (* Fall back to the decision that's based on the year that the OS
-           * was released in under three circumstances:
-           * - the user specified the location of the Windows virtio drivers
-           *   through an environment variable, or
-           * - "Libosinfo_utils.get_os_by_short_id" fails to look up the OS,
-           *   or
-           * - "Libosinfo_utils.best_driver" cannot find any matching driver.
-           * In each of these cases, a "Not_found" exception is raised.  This
-           * behavior exactly mirrors that of "Windows_virtio.copy_drivers".
-           *)
-          if t.was_set then raise Not_found;
-          let os = Libosinfo_utils.get_os_by_short_id t.i_osinfo in
-          let devices = os#get_devices ()
-          and drivers = os#get_device_drivers () in
-          let best_drv_devs =
-            (Libosinfo_utils.best_driver drivers t.i_arch).devices in
-          debug "libosinfo internal devices for OS \"%s\":\n%s"
-            t.i_osinfo
-            (Libosinfo_utils.string_of_osinfo_device_list devices);
-          debug "libosinfo \"best driver\" devices for OS \"%s\":\n%s"
-            t.i_osinfo
-            (Libosinfo_utils.string_of_osinfo_device_list best_drv_devs);
-          let { Libosinfo_utils.q35; vio10 } =
-            Libosinfo_utils.os_support_of_osinfo_device_list
-              (devices @ best_drv_devs) in
-          (if q35 then Q35 else I440FX), vio10
-        with
-        | Not_found ->
+       (match Libosinfo_utils.get_os_by_short_id t.i_osinfo with
+        | Some os ->
+           let devices = os#get_devices () in
+           debug "libosinfo devices for OS \"%s\":\n%s" t.i_osinfo
+             (Libosinfo_utils.string_of_osinfo_device_list devices);
+           (if Libosinfo_utils.os_devices_supports_q35 devices then Q35
+            else I440FX)
+        | None ->
            (* Pivot on the year 2007.  Any Windows version from earlier than
             * 2007 should use i440fx, anything 2007 or newer should use q35.
             * Luckily this coincides almost exactly with the release of NT 6.
             *)
-           (if t.i_major_version < 6 then I440FX else Q35), true
+           debug "osinfo lookup failed. falling back to heuristic for windows machine type";
+           (if t.i_major_version < 6 then I440FX else Q35)
        )
-    | _ -> Virt, true
+    | _ -> Virt
   in
 
   if not (copy_drivers t driverdir) then (
@@ -180,7 +156,7 @@ let rec inject_virtio_win_drivers ({ g } as t) reg =
       { block_driver = IDE; net_driver = RTL8139;
         virtio_rng = false; virtio_balloon = false;
         isa_pvpanic = false; virtio_socket = false;
-        machine; virtio_1_0; }
+        machine; virtio_1_0 = true; }
   )
   else (
     (* Can we install the block driver? *)
@@ -259,18 +235,32 @@ let rec inject_virtio_win_drivers ({ g } as t) reg =
       virtio_balloon = g#exists (driverdir // "balloon.inf");
       isa_pvpanic = g#exists (driverdir // "pvpanic.inf");
       virtio_socket = g#exists (driverdir // "viosock.inf");
-      machine; virtio_1_0;
+      machine; virtio_1_0 = true;
     }
   )
 
-and inject_qemu_ga t =
-  let msi_files = copy_qemu_ga t in
+and inject_qemu_ga ({ g; root } as t) =
+  (* Copy the qemu-ga MSI(s) to the guest. *)
+  let dir, dir_win = Firstboot.firstboot_dir g root in
+  let dir_win = Option.value dir_win ~default:dir in
+  let tempdir = sprintf "%s/Temp" dir in
+  let tempdir_win = sprintf "%s\\Temp" dir_win in
+  g#mkdir_p tempdir;
+
+  let msi_files = copy_qemu_ga t tempdir in
   if msi_files <> [] then
-    configure_qemu_ga t msi_files;
+    configure_qemu_ga t tempdir_win msi_files;
   msi_files <> [] (* return true if we found some qemu-ga MSI files *)
 
-and inject_blnsvr t =
-  let files = copy_blnsvr t in
+and inject_blnsvr ({ g; root } as t) =
+  (* Copy the files to the guest. *)
+  let dir, dir_win = Firstboot.firstboot_dir g root in
+  let dir_win = Option.value dir_win ~default:dir in
+  let tempdir = sprintf "%s/Temp" dir in
+  let tempdir_win = sprintf "%s\\Temp" dir_win in
+  g#mkdir_p tempdir;
+
+  let files = copy_blnsvr t tempdir in
   match files with
   | [] -> false (* Didn't find or install anything. *)
 
@@ -278,7 +268,7 @@ and inject_blnsvr t =
    * drivers/by-driver).  Pick the first.
    *)
   | blnsvr :: _ ->
-     configure_blnsvr t blnsvr;
+     configure_blnsvr t tempdir_win blnsvr;
      true
 
 and add_guestor_to_registry t ((g, root) as reg) drv_name drv_pciid =
@@ -354,19 +344,18 @@ and ddb_regedits inspect drv_name drv_pciid =
  * been copied.
  *)
 and copy_drivers t driverdir =
-  (not t.was_set && [] <> copy_from_libosinfo t driverdir) ||
     [] <> copy_from_virtio_win t "/" driverdir
             (virtio_iso_path_matches_guest_os t)
       (fun () ->
         error (f_"root directory ‘/’ is missing from the virtio-win directory or ISO.\n\nThis should not happen and may indicate that virtio-win or virt-v2v is broken in some way.  Please report this as a bug with a full debug log."))
 
-and copy_qemu_ga t =
-  copy_from_virtio_win t "/" "/" (virtio_iso_path_matches_qemu_ga t)
+and copy_qemu_ga t tempdir =
+  copy_from_virtio_win t "/" tempdir (virtio_iso_path_matches_qemu_ga t)
     (fun () ->
       error (f_"root directory ‘/’ is missing from the virtio-win directory or ISO.\n\nThis should not happen and may indicate that virtio-win or virt-v2v is broken in some way.  Please report this as a bug with a full debug log."))
 
-and copy_blnsvr t =
-  copy_from_virtio_win t "/" "/" (virtio_iso_path_matches_blnsvr t)
+and copy_blnsvr t tempdir =
+  copy_from_virtio_win t "/" tempdir (virtio_iso_path_matches_blnsvr t)
     (fun () ->
       error (f_"root directory ‘/’ is missing from the virtio-win directory or ISO.\n\nThis should not happen and may indicate that virtio-win or virt-v2v is broken in some way.  Please report this as a bug with a full debug log."))
 
@@ -449,8 +438,7 @@ and copy_from_virtio_win ({ g } as t) srcdir destdir filter missing =
  * specific Windows flavor of the current guest.
  *)
 and virtio_iso_path_matches_guest_os t path =
-  let { i_major_version = os_major; i_minor_version = os_minor;
-        i_arch = arch; i_product_variant = os_variant;
+  let { i_arch = arch;
         i_osinfo = osinfo } = t in
   try
     (* Lowercased path, since the ISO may contain upper or lowercase path
@@ -460,56 +448,71 @@ and virtio_iso_path_matches_guest_os t path =
 
     (* Using the full path, work out what version of Windows
      * this driver is for.  Paths can be things like:
-     * "NetKVM/2k12R2/amd64/netkvm.sys" or
-     * "./drivers/amd64/Win2012R2/netkvm.sys".
+     * "./NetKVM/2k12R2/amd64/netkvm.sys" (on the ISO) or
+     * "./drivers/by-os/amd64/2k12R2/netkvm.sys" (in /usr/share/virtio-win).
      * Note we check lowercase paths.
      *)
-    let pathelem elem = String.find lc_path ("/" ^ elem ^ "/") >= 0 in
+    let pathelem elem =
+      String.find lc_path ("/" ^ elem ^ "/") >= 0 ||
+      String.starts_with (elem ^ "/") lc_path
+    in
     let p_arch =
       if pathelem "x86" || pathelem "i386" then "i386"
       else if pathelem "amd64" then "x86_64"
       else raise Not_found in
 
-    let is_client os_variant = os_variant = "Client"
-    and not_client os_variant = os_variant <> "Client"
-    and any_variant os_variant = true
-    and any_osinfo osinfo = true in
-    let p_os_major, p_os_minor, match_os_variant, match_osinfo =
-      if pathelem "xp" || pathelem "winxp" then
-        (5, 1, any_variant, any_osinfo)
-      else if pathelem "2k3" || pathelem "win2003" then
-        (5, 2, any_variant, any_osinfo)
+    let match_osinfo =
+      if pathelem "xp" then
+        ((=) "winxp")
+      else if pathelem "2k3" then
+        (function "win2k3" | "win2k3r2" -> true | _ -> false)
       else if pathelem "vista" then
-        (6, 0, is_client, any_osinfo)
-      else if pathelem "2k8" || pathelem "win2008" then
-        (6, 0, not_client, any_osinfo)
-      else if pathelem "w7" || pathelem "win7" then
-        (6, 1, is_client, any_osinfo)
-      else if pathelem "2k8r2" || pathelem "win2008r2" then
-        (6, 1, not_client, any_osinfo)
-      else if pathelem "w8" || pathelem "win8" then
-        (6, 2, is_client, any_osinfo)
-      else if pathelem "2k12" || pathelem "win2012" then
-        (6, 2, not_client, any_osinfo)
-      else if pathelem "w8.1" || pathelem "win8.1" then
-        (6, 3, is_client, any_osinfo)
-      else if pathelem "2k12r2" || pathelem "win2012r2" then
-        (6, 3, not_client, any_osinfo)
-      else if pathelem "w10" || pathelem "win10" then
-        (10, 0, is_client, ((=) "win10"))
-      else if pathelem "w11" || pathelem "win11" then
-        (10, 0, is_client, ((=) "win11"))
-      else if pathelem "2k16" || pathelem "win2016" then
-        (10, 0, not_client, ((=) "win2k16"))
-      else if pathelem "2k19" || pathelem "win2019" then
-        (10, 0, not_client, ((=) "win2k19"))
-      else if pathelem "2k22" || pathelem "win2022" then
-        (10, 0, not_client, ((=) "win2k22"))
+        ((=) "winvista")
+      else if pathelem "2k8" then
+        ((=) "win2k8")
+      else if pathelem "w7" then
+        ((=) "win7")
+      else if pathelem "2k8r2" then
+        ((=) "win2k8r2")
+      else if pathelem "w8" then
+        ((=) "win8")
+      else if pathelem "2k12" then
+        ((=) "win2k12")
+      else if pathelem "w8.1" then
+        ((=) "win8.1")
+      else if pathelem "2k12r2" then
+        ((=) "win2k12r2")
+      else if pathelem "w10" then
+        ((=) "win10")
+      else if pathelem "w11" then
+        ((=) "win11")
+      else if pathelem "2k16" then
+        ((=) "win2k16")
+      else if pathelem "2k19" then
+        ((=) "win2k19")
+      else if pathelem "2k22" then
+        ((=) "win2k22")
+      else if pathelem "2k25" then
+        ((=) "win2k25")
       else
         raise Not_found in
 
-    arch = p_arch && os_major = p_os_major && os_minor = p_os_minor &&
-    match_os_variant os_variant &&
+    (* https://issues.redhat.com/browse/RHEL-56383
+     * sriov/ dir can have files that conflict with netkvm driver install.
+     *)
+    let p_sriov =
+      String.find path "vioprot." >= 0 ||
+      pathelem "sriov"
+    in
+
+    (* .pdb files are debugging files. they are not part of the
+     * signed driver and are not necessary to install.
+     *)
+    let p_pdb = String.ends_with ".pdb" path in
+
+    arch = p_arch &&
+    not p_sriov &&
+    not p_pdb &&
     match_osinfo osinfo
 
   with Not_found -> false
@@ -536,83 +539,35 @@ and virtio_iso_path_matches_qemu_ga t path =
 and virtio_iso_path_matches_blnsvr t path =
   virtio_iso_path_matches_guest_os t path && PCRE.matches re_blnsvr path
 
-(* Look up in libosinfo for the OS, and copy all the locally
- * available files specified as drivers for that OS to the [destdir].
- *
- * This function does nothing in case either:
- * - the osinfo short ID is not found in the libosinfo DB
- * - the OS does not have any driver for the architecture of the guest
- * - the location of the drivers is not a local directory
- *
- * Files that do not exist are silently skipped.
- *
- * Returns list of copied files.
+(* Install qemu-ga.  [files] is the non-empty list of possible qemu-ga
+ * installers we detected.
  *)
-and copy_from_libosinfo { g; i_osinfo; i_arch } destdir =
-  try
-    let os = Libosinfo_utils.get_os_by_short_id i_osinfo in
-    let drivers = os#get_device_drivers () in
-    let driver = Libosinfo_utils.best_driver drivers i_arch in
-    let uri = Xml.parse_uri driver.Libosinfo.location in
-    let basedir =
-      match uri.Xml.uri_path with
-      | Some p -> p
-      | None -> assert false in
-    List.filter_map (
-      fun f ->
-        let source = basedir // f in
-        if not (Sys.file_exists source) then
-          None
-        else (
-          let target_name = String.lowercase_ascii (Filename.basename f) in
-          let target = destdir ^ "/" ^ target_name in
-          debug "windows: copying guest tools bits (via libosinfo): 'host:%s' -> '%s'"
-                source target;
+and configure_qemu_ga t tempdir_win files =
+  let script = ref [] in
+  let add = List.push_back script in
 
-          g#write target (read_whole_file source);
-          Some target_name
-        )
-    ) driver.Libosinfo.files
-  with Not_found -> []
-
-and configure_qemu_ga t files =
+  add "# Virt-v2v script which installs QEMU Guest Agent";
+  add "";
+  add "# Uncomment this line for lots of debug output.";
+  add "# Set-PSDebug -Trace 2";
+  add "";
+  add "Write-Host Installing QEMU Guest Agent";
+  add "";
+  add "# Run qemu-ga installers";
   List.iter (
-    fun msi_path ->
-      (* Windows is a trashfire.
-       * https://stackoverflow.com/a/18730884
-       * https://bugzilla.redhat.com/show_bug.cgi?id=1895323
-       *)
-      let psh_script = ref [] in
-      let add = List.push_back psh_script in
+    fun msi ->
+      add (sprintf "Write-Host \"Writing log to %s\\%s.log\""
+             tempdir_win msi);
+      (* [`] is an escape char for quotes *)
+      add (sprintf "Start-Process -Wait -FilePath \"%s\\%s\" -ArgumentList \"/norestart\",\"/qn\",\"/l+*vx\",\"`\"%s\\%s.log`\"\""
+             tempdir_win msi tempdir_win msi)
+  ) files;
 
-      add "# Uncomment this line for lots of debug output.";
-      add "# Set-PSDebug -Trace 2";
-      add "";
-      add "Write-Host Removing any previously scheduled qemu-ga installation";
-      add "schtasks.exe /Delete /TN Firstboot-qemu-ga /F";
-      add "";
-      add (sprintf
-             "Write-Host Scheduling delayed installation of qemu-ga from %s"
-             msi_path);
-      add "$d = (get-date).AddSeconds(120)";
-      add "$dtfinfo = [System.Globalization.DateTimeFormatInfo]::CurrentInfo";
-      add "$sdp = $dtfinfo.ShortDatePattern";
-      add "$sdp = $sdp -replace 'y+', 'yyyy'";
-      add "$sdp = $sdp -replace 'M+', 'MM'";
-      add "$sdp = $sdp -replace 'd+', 'dd'";
-      add "schtasks.exe /Create /SC ONCE `";
-      add "  /ST $d.ToString('HH:mm') /SD $d.ToString($sdp) `";
-      add "  /RU SYSTEM /TN Firstboot-qemu-ga `";
-      add (sprintf "  /TR \"C:\\%s /forcerestart /qn /l+*vx C:\\%s.log\""
-             msi_path msi_path);
+  Firstboot.add_firstboot_powershell t.g t.root "install-qemu-ga" !script
 
-      Firstboot.add_firstboot_powershell t.g t.root
-        (sprintf "install-%s.ps1" msi_path) !psh_script;
-  ) files
-
-and configure_blnsvr t blnsvr =
+and configure_blnsvr t tempdir_win blnsvr =
   let cmd = sprintf "\
                      @echo off\n\
                      echo Installing %s\n\
-                     c:\\%s -i\n" blnsvr blnsvr in
-  Firstboot.add_firstboot_script t.g t.root (sprintf "install-%s" blnsvr) cmd
+                     \"%s\\%s\" -i\n" blnsvr tempdir_win blnsvr in
+  Firstboot.add_firstboot_script t.g t.root "install-blnsvr" cmd

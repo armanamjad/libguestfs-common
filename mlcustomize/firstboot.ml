@@ -152,7 +152,7 @@ WantedBy=%s
   and install_sysvinit_service g root distro major =
     match distro with
     | "fedora"|"rhel"|"centos"|"scientificlinux"|"oraclelinux"|"rocky"|
-        "redhat-based" ->
+        "redhat-based"|"openeuler" ->
       install_sysvinit_redhat g
     | "opensuse"|"sles"|"suse-based" ->
       install_sysvinit_suse g
@@ -239,7 +239,22 @@ WantedBy=%s
 end
 
 module Windows = struct
-  let rec install_service (g : Guestfs.guestfs) root =
+  (* Create and return the firstboot directory. *)
+  let create_firstboot_dir (g : Guestfs.guestfs) =
+    let rec loop firstboot_dir firstboot_dir_win = function
+      | [] -> firstboot_dir, firstboot_dir_win
+      | dir :: path ->
+         let firstboot_dir =
+           if firstboot_dir = "" then "/" ^ dir else firstboot_dir // dir in
+         let firstboot_dir_win = firstboot_dir_win ^ "\\" ^ dir in
+         let firstboot_dir = g#case_sensitive_path firstboot_dir in
+         g#mkdir_p firstboot_dir;
+         loop firstboot_dir firstboot_dir_win path
+    in
+    loop "" "C:" ["Program Files"; "Guestfs"; "Firstboot"]
+
+  let rec install_service (g : Guestfs.guestfs) root
+            firstboot_dir firstboot_dir_win =
     (* Either rhsrvany.exe or pvvxsvc.exe must exist.
      *
      * (Check also that it's not a dangling symlink but a real file).
@@ -254,20 +269,7 @@ module Windows = struct
        error (f_"One of rhsrvany.exe or pvvxsvc.exe is missing in %s.  One of them is required in order to install Windows firstboot scripts.  You can get one by building rhsrvany (https://github.com/rwmjones/rhsrvany)")
              (virt_tools_data_dir ()) in
 
-    (* Create a directory for firstboot files in the guest. *)
-    let firstboot_dir, firstboot_dir_win =
-      let rec loop firstboot_dir firstboot_dir_win = function
-        | [] -> firstboot_dir, firstboot_dir_win
-        | dir :: path ->
-          let firstboot_dir =
-            if firstboot_dir = "" then "/" ^ dir else firstboot_dir // dir in
-          let firstboot_dir_win = firstboot_dir_win ^ "\\" ^ dir in
-          let firstboot_dir = g#case_sensitive_path firstboot_dir in
-          g#mkdir_p firstboot_dir;
-          loop firstboot_dir firstboot_dir_win path
-      in
-      loop "" "C:" ["Program Files"; "Guestfs"; "Firstboot"] in
-
+    (* Create a directory for firstboot scripts in the guest. *)
     g#mkdir_p (firstboot_dir // "scripts");
 
     (* Copy pvvxsvc or rhsrvany to the guest. *)
@@ -276,6 +278,9 @@ module Windows = struct
     (* Write a firstboot.bat control script which just runs the other
      * scripts in the directory.  Note we need to use CRLF line endings
      * in this script.
+     *
+     * XXX It would be better to use powershell here.  For some ideas see
+     * https://github.com/HCK-CI/HLK-Setup-Scripts/
      *)
     let firstboot_script = sprintf "\
 @echo off
@@ -297,6 +302,7 @@ if not exist \"%%scripts_done%%\" (
   mkdir \"%%scripts_done%%\"
 )
 
+:: Pick the next script to run.
 for %%%%f in (\"%%scripts%%\"\\*.bat) do (
   echo running \"%%%%f\"
   move \"%%%%f\" \"%%scripts_done%%\"
@@ -305,8 +311,17 @@ for %%%%f in (\"%%scripts%%\"\\*.bat) do (
   set elvl=!errorlevel!
   echo .... exit code !elvl!
   popd
+
+  :: Reboot the computer.  This is necessary to free any locked
+  :: files which may prevent later scripts from running.
+  shutdown /r /t 0 /y
+
+  :: Exit the script (in case shutdown returns before rebooting).
+  :: On next boot, the whole firstboot service will be called again.
+  exit /b
 )
 
+:: Fallthrough here if there are no scripts.
 echo uninstalling firstboot service
 \"%%firstboot%%\\%s\" -s firstboot uninstall
 " firstboot_dir_win srvany in
@@ -339,10 +354,24 @@ echo uninstalling firstboot service
             "PWD", REG_SZ firstboot_dir_win ];
         ] in
         reg_import reg regedits
-      );
-
-    firstboot_dir
+      )
 end
+
+let firstboot_dir (g : Guestfs.guestfs) root =
+  let typ = g#inspect_get_type root in
+
+  match typ with
+  | "linux" ->
+     let dir = Linux.firstboot_dir in
+     g#mkdir_p dir;
+     dir, None
+
+  | "windows" ->
+     let dir, dir_win = Windows.create_firstboot_dir g in
+     dir, Some dir_win
+
+  | _ ->
+    error (f_"guest type %s is not supported") typ
 
 let script_count = ref 0
 
@@ -363,7 +392,8 @@ let add_firstboot_script (g : Guestfs.guestfs) root ?(prio = 5000) name
     g#chmod 0o755 filename
 
   | "windows", _ ->
-    let firstboot_dir = Windows.install_service g root in
+    let firstboot_dir, firstboot_dir_win = Windows.create_firstboot_dir g in
+    Windows.install_service g root firstboot_dir firstboot_dir_win;
     let filename = firstboot_dir // "scripts" // filename ^ ".bat" in
     g#write filename (String.unix2dos content)
 
@@ -382,21 +412,18 @@ let add_firstboot_powershell g root ?prio name code =
    *)
   assert (g#inspect_get_type root = "windows");
 
-  let windows_systemroot = g#inspect_get_windows_systemroot root in
-
-  (* Create the temporary directory to put the Powershell file. *)
-  let tempdir = sprintf "%s/Temp" windows_systemroot in
+  (* Place the Powershell script into firstboot_dir/Temp *)
+  let firstboot_dir, firstboot_dir_win = Windows.create_firstboot_dir g in
+  let tempdir = sprintf "%s/Temp" firstboot_dir in
   g#mkdir_p tempdir;
+
+  let ps_path = sprintf "%s/%s.ps1" tempdir name in
+  let ps_path_win = sprintf "%s\\Temp\\%s.ps1" firstboot_dir_win name in
   let code = String.concat "\r\n" code ^ "\r\n" in
-  g#write (sprintf "%s/%s" tempdir name) code;
+  g#write ps_path code;
 
-  (* Powershell interpreter.  Should we check this exists? XXX *)
-  let ps_exe =
-    windows_systemroot ^
-    "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" in
-
-  (* Windows path to the Powershell script. *)
-  let ps_path = windows_systemroot ^ "\\Temp\\" ^ name in
-
-  let fb = sprintf "%s -ExecutionPolicy ByPass -file %s" ps_exe ps_path in
+  (* Create a regular firstboot bat that just invokes powershell *)
+  let fb =
+    sprintf "powershell.exe -ExecutionPolicy ByPass -NoProfile -file \"%s\""
+      ps_path_win in
   add_firstboot_script g root ?prio name fb

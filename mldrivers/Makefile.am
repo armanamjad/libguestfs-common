@@ -1,5 +1,5 @@
 # Common code for driver detection used by virt-drivers and virt-v2v
-# Copyright (C) 2011-2023 Red Hat Inc.
+# Copyright (C) 2011-2025 Red Hat Inc.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -79,6 +79,9 @@ OCAMLPACKAGES = \
 	-I $(top_builddir)/common/mltools \
 	-I $(builddir)
 OCAMLPACKAGES_TESTS = $(MLDRIVERS_CMA)
+if HAVE_OCAML_PKG_GETTEXT
+OCAMLPACKAGES += -package gettext-stub
+endif
 
 OCAMLFLAGS = $(OCAML_FLAGS) $(OCAML_WARN_ERROR) -ccopt '$(CFLAGS)'
 

@@ -1,5 +1,5 @@
 (* virt-v2v
- * Copyright (C) 2009-2023 Red Hat Inc.
+ * Copyright (C) 2009-2025 Red Hat Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -110,7 +110,7 @@ object
     List.map ((^) grub_prefix) vmlinuzes
 
   method set_default_kernel vmlinuz =
-    if not (String.is_prefix vmlinuz grub_prefix) then
+    if not (String.starts_with grub_prefix vmlinuz) then
       error (f_"kernel %s is not under grub tree %s")
         vmlinuz grub_prefix;
     let kernel_under_grub_prefix =
@@ -375,8 +375,7 @@ let detect_bootloader (g : G.guestfs) root i_firmware =
     with G.Error msg ->
       error (f_"could not find bootloader mount point (%s): %s") mp msg in
 
-  (*
-   * Workaround for older UEFI-based Debian which may not have
+  (* Workaround for older UEFI-based Debian which may not have
    * /boot/efi/EFI/debian/grub.cfg.
    *)
   let paths =
@@ -409,6 +408,28 @@ let detect_bootloader (g : G.guestfs) root i_firmware =
             else path, typ
     in
     loop paths in
+
+  (* If we found a grub2 boot config called /boot/efi/EFI/<OS>/grub.cfg
+   * check if it's a "wrapper" that redirects to /boot/grub2/grub.cfg.
+   * This is needed for Fedora 34+ and RHEL 9.0+.  See:
+   * https://issues.redhat.com/browse/RHEL-32099
+   * https://issues.redhat.com/browse/RHEL-77989
+   * https://github.com/libguestfs/libguestfs-common/pull/6
+   *)
+  let grub_config =
+    match typ with
+    | Grub1 -> grub_config
+    | Grub2 ->
+       let grub2_efi_rex = PCRE.compile "^/boot/efi/EFI/.*/grub.cfg$" in
+       let grub2_real = "/boot/grub2/grub.cfg" in
+
+       if PCRE.matches grub2_efi_rex grub_config &&
+          (* does it look like the "wrapper"? *)
+          g#grep "configfile \\$prefix/grub\\.cfg" grub_config <> [||] &&
+          g#exists grub2_real then
+         grub2_real
+       else
+         grub_config in
 
   let bl =
     match typ with

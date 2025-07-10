@@ -18,41 +18,17 @@
 
 (** This module implements helper functions based on libosinfo. *)
 
-val get_os_by_short_id : string -> Libosinfo.osinfo_os
+val get_os_by_short_id : string -> Libosinfo.osinfo_os option
 (** [get_os_by_short_id short-id] get the [Libosinfo.osinfo_os]
     that has the specified [short-id].
-
-    Raise [Not_found] in case there is no matching OS.
+    Returns [None] if there is no matching short ID.
  *)
 
 val string_of_osinfo_device_list : Libosinfo.osinfo_device list -> string
 (** Convert an [osinfo_device] list to a printable string for debugging. *)
 
-val string_of_osinfo_device_driver : Libosinfo.osinfo_device_driver -> string
-(** Convert a [osinfo_device_driver] to a printable string for debugging. *)
+val os_devices_supports_vio10 : Libosinfo.osinfo_device list -> bool
+(** Check [osinfo_device] list includes evidence of virtio-1.0. *)
 
-val best_driver : Libosinfo.osinfo_device_driver list ->
-                  string ->
-                  Libosinfo.osinfo_device_driver
-(** [best_driver drivers arch] picks the best driver from [drivers] as follows:
-    - filters out drivers that:
-      - target a different architecture,
-      - are not pre-installable,
-      - have an invalid or non-local URL;
-    - sorts the remaining drivers by priority, like libosinfo does;
-    - picks the top driver of the sorted list.
-    Raises Not_found if no driver in [drivers] survives filtering. *)
-
-type os_support = {
-  q35 : bool;
-  vio10 : bool;
-}
-(** Tell whether the operating system supports the Q35 board type and/or
-    non-transitional (virtio-1.0-only) virtio devices. (Internally, the
-    virtio-1.0-net device is used as a proxy for the general statement about
-    virtio-1.0.)
- *)
-
-val os_support_of_osinfo_device_list : Libosinfo.osinfo_device list ->
-                                       os_support
-(** Get [os_support] from an [osinfo_device] list. *)
+val os_devices_supports_q35 : Libosinfo.osinfo_device list -> bool
+(** Check [osinfo_device] list includes q35. *)

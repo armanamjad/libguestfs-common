@@ -1,9 +1,5 @@
-(* libguestfs generated file
- * WARNING: THIS FILE IS GENERATED
- *          from the code in the generator/ subdirectory.
- * ANY CHANGES YOU MAKE TO THIS FILE WILL BE LOST.
- *
- * Copyright (C) 2009-2023 Red Hat Inc.
+(* virt-builder
+ * Copyright (C) 2013 Red Hat Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,16 +16,4 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  *)
 
-(** UEFI paths. *)
-
-type uefi_firmware = {
-  code : string;                (** code file *)
-  code_debug : string option;   (** code debug file *)
-  vars : string;                (** vars template file *)
-  flags : uefi_flags;           (** flags *)
-}
-and uefi_flags = uefi_flag list
-and uefi_flag = UEFI_FLAG_SECURE_BOOT_REQUIRED
-
-val uefi_aarch64_firmware : uefi_firmware list
-val uefi_x86_64_firmware : uefi_firmware list
+val edit_file : Guestfs.t -> string -> string -> unit

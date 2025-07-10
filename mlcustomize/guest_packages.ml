@@ -1,5 +1,5 @@
 (* virt-customize
- * Copyright (C) 2012-2023 Red Hat Inc.
+ * Copyright (C) 2012-2025 Red Hat Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,10 +61,7 @@ let install_command packages package_management =
       apt-get $apt_opts update
       apt-get $apt_opts install %s
     " quoted_args
-  | "dnf" ->
-     sprintf "dnf%s -y install %s"
-             (if verbose () then " --verbose" else "")
-             quoted_args
+  | "dnf" ->    sprintf "dnf -y install %s" quoted_args
   | "pisi" ->   sprintf "pisi it %s" quoted_args
   | "pacman" -> sprintf "pacman -S --noconfirm %s" quoted_args
   | "urpmi" ->  sprintf "urpmi %s" quoted_args

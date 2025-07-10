@@ -32,32 +32,19 @@ type osinfo_device = {
   subsystem : string;
 }
 
-type osinfo_device_driver = {
-  architecture : string;
-  location : string;
-  pre_installable : bool;
-  signed : bool;
-  priority : int64;
-  files : string list;
-  devices : osinfo_device list;
-}
-
 class osinfo_os : osinfo_os_t -> object
   method get_id : unit -> string
   (** Return the ID. *)
-  method get_device_drivers : unit -> osinfo_device_driver list
-  (** Return the list of device drivers. *)
   method get_devices : unit -> osinfo_device list
   (** Return the list of devices. *)
 end
 (** Minimal OsinfoOs wrapper. *)
 
 class osinfo_db : unit -> object
-  method find_os_by_short_id : string -> osinfo_os
+  method find_os_by_short_id : string -> osinfo_os option
   (** [find_os_by_short_id short-id] get the [osinfo_os] that has the
       specified [short-id].
-
-      Raise [Not_found] in case there is no matching OS.
+      Returns [None] if there is no matching short ID.
    *)
 end
 (** Minimal OsinfoDb wrapper. *)

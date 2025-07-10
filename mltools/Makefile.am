@@ -116,7 +116,7 @@ libmltools_a_CFLAGS = \
 	$(LIBVIRT_CFLAGS) \
 	$(LIBXML2_CFLAGS) \
 	$(LIBGUESTFS_CFLAGS) \
-	$(JANSSON_CFLAGS) \
+	$(JSON_C_CFLAGS) \
 	$(LIBOSINFO_CFLAGS) \
 	-fPIC
 
@@ -138,9 +138,6 @@ OCAMLPACKAGES_TESTS = $(MLTOOLS_CMA)
 if HAVE_OCAML_PKG_GETTEXT
 OCAMLPACKAGES += -package gettext-stub
 endif
-if HAVE_OCAML_PKG_OUNIT
-OCAMLPACKAGES_TESTS += -package ounit2
-endif
 
 OCAMLCLIBS = \
 	-lutils \
@@ -148,7 +145,7 @@ OCAMLCLIBS = \
 	$(LIBCRYPT_LIBS) \
 	$(LIBVIRT_LIBS) \
 	$(LIBXML2_LIBS) \
-	$(JANSSON_LIBS) \
+	$(JSON_C_LIBS) \
 	$(LIBOSINFO_LIBS) \
 	$(LIBINTL) \
 	-lgnu
@@ -366,7 +363,10 @@ TESTS_ENVIRONMENT = $(top_builddir)/run --test
 
 TESTS = \
 	test-getopt.sh \
-	test-machine-readable.sh
+	test-machine-readable.sh \
+	JSON_tests \
+	JSON_parser_tests \
+	tools_utils_tests
 if HAVE_PYTHON
 TESTS += \
 	test-tools-messages.sh
@@ -374,12 +374,10 @@ endif
 check_PROGRAMS = \
 	getopt_tests \
 	machine_readable_tests \
-	tools_messages_tests
-
-if HAVE_OCAML_PKG_OUNIT
-check_PROGRAMS += JSON_tests JSON_parser_tests tools_utils_tests
-TESTS += JSON_tests JSON_parser_tests tools_utils_tests
-endif
+	tools_messages_tests \
+	JSON_tests \
+	JSON_parser_tests \
+	tools_utils_tests
 
 check-valgrind:
 	$(MAKE) VG="@VG@" check

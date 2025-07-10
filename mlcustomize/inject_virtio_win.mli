@@ -1,5 +1,5 @@
 (* virt-v2v
- * Copyright (C) 2009-2023 Red Hat Inc.
+ * Copyright (C) 2009-2025 Red Hat Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -44,16 +44,7 @@ val from_path : Guestfs.guestfs -> string -> string -> t
 
     The [path] should point to either the virtio-win ISO
     (eg. F</usr/share/virtio-win/virtio-win.iso>) or the unpacked
-    directory (eg. F</usr/share/virtio-win>).
-
-    The libosinfo database is ignored if you use this method. *)
-
-val from_libosinfo : Guestfs.guestfs -> string -> t
-(** Create a new virtio-win handle.  The parameters are [g root].
-
-    The libosinfo database will be used as the source for drivers.
-    The virtio-win ISO or unpacked directory is ignored if you use
-    this method. *)
+    directory (eg. F</usr/share/virtio-win>). *)
 
 val from_environment : Guestfs.guestfs -> string -> string -> t
 (** Using the [VIRTIO_WIN] environment variable (if present), set up

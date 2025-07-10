@@ -4,7 +4,7 @@
  *          and from the code in the generator/ subdirectory.
  * ANY CHANGES YOU MAKE TO THIS FILE WILL BE LOST.
  *
- * Copyright (C) 2009-2023 Red Hat Inc.
+ * Copyright (C) 2009-2025 Red Hat Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -120,11 +120,14 @@ and flags = {
 }
 
 type argspec = Getopt.keys * Getopt.spec * Getopt.doc
-val argspec : unit -> (argspec * string option * string) list * (unit -> ops)
+val argspec : ?v2v:bool -> unit -> (argspec * string option * string) list * (unit -> ops)
 (** This returns a pair [(list, get_ops)].
 
     [list] is a list of the command line arguments, plus some extra data.
 
     [get_ops] is a function you can call {i after} command line parsing
     which will return the actual operations specified by the user on the
-    command line. *)
+    command line.
+
+    If the parameter [~v2v] is true then this excludes parameters
+    that should be excluded from virt-v2v. *)
