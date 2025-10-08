@@ -108,12 +108,11 @@ is_uri (const char *arg)
 }
 
 static int
-parse(const char* arg, char** path_ret, char** query_ret, char** protocol_ret,
-    char*** server_ret, char** username_ret, char** password_ret)
+parse(const char *arg, char **path_ret, char **query_ret, char **protocol_ret,
+    char ***server_ret, char **username_ret, char **password_ret)
 {
   CLEANUP_XMLFREEURI xmlURIPtr uri = NULL;
   CLEANUP_FREE char *socket = NULL;
-  char *path;
 
   uri = xmlParseURI (arg);
   if (!uri) {
@@ -194,15 +193,14 @@ parse(const char* arg, char** path_ret, char** query_ret, char** protocol_ret,
    * exportname expected will be "pool/disk".  Here, uri->path will be
    * "/pool/disk" so we have to knock off the leading '/' character.
    */
-  char* tmpPath = uri->path;
+  char *tmpPath = uri->path;
   if (tmpPath && tmpPath[0] == '/' &&
       (STREQ(uri->scheme, "gluster") ||
           STREQ(uri->scheme, "iscsi") ||
           STRPREFIX(uri->scheme, "nbd") ||
           STREQ(uri->scheme, "rbd") ||
           STREQ(uri->scheme, "sheepdog")))
-      path++;
-  tmpPath++;
+        tmpPath++;
 
   *path_ret = strdup(tmpPath ? tmpPath : "");
   if (*path_ret == NULL) {
